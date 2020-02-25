@@ -32,7 +32,37 @@ package object interpreter {
   def metricName[A](prg: BuildEndpoint[A]): String = prg.foldMap(metricsNameCompiler).getConst.mkString("/")
 
   def fromReqCompiler: Op ~> FromReq = new FunctionK[Op, FromReq] {
-    override def apply[A](fa: Op[A]): FromReq[A] = ???
+
+    def consumeFirstSegment: Kleisli[OptionT[State[HtReq, *], *], HtReq, String] = Kleisli { req =>
+      req.path match {
+        case x::xs => OptionT.liftF(State.set(HtReq(req.methodName, xs, req.query)).map(_ => x))
+        case _ => OptionT.none
+      }
+    }
+
+    override def apply[A](x: Op[A]): FromReq[A] = Kleisli { req =>
+      x match {
+        case m: MethodName =>
+          if (req.methodName == m) {
+            OptionT.liftF(State.pure(()))
+          } else {
+            OptionT.none
+          }
+        case PathSegment.StringVar(_) =>
+          consumeFirstSegment.run(req)
+        case PathSegment.Const(pathName) =>
+          consumeFirstSegment.run(req).flatMap{segName =>
+            if (segName == pathName) {
+              OptionT.liftF(State.pure(()))
+            } else {
+              OptionT.none
+            }
+          }
+        case QueryParam(name) =>
+          OptionT.fromOption(req.query.get(name))
+      }
+
+    }
   }
 
   def fromReq[A](prg: BuildEndpoint[A]): HtReq => Option[A] = req => {
