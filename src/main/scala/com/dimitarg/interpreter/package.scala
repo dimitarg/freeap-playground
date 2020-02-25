@@ -2,12 +2,16 @@ package com.dimitarg
 
 import cats.implicits._
 import cats.arrow.FunctionK
-import cats.data.Const
+import cats.data.{Const, Kleisli, OptionT, State}
 import cats.~>
 import com.dimitarg.alg.BuildEndpoint
+import com.dimitarg.infra.HtReq
 
 package object interpreter {
+
   type Log[A] = Const[List[String], A]
+
+  type FromReq[A] = Kleisli[OptionT[State[HtReq, *], *], HtReq, A]
 
   def printerCompiler: Op ~> Log = new FunctionK[Op, Log] {
     override def apply[A](x: Op[A]): Log[A] = {
@@ -26,4 +30,16 @@ package object interpreter {
   }
 
   def metricName[A](prg: BuildEndpoint[A]): String = prg.foldMap(metricsNameCompiler).getConst.mkString("/")
+
+  def fromReqCompiler: Op ~> FromReq = new FunctionK[Op, FromReq] {
+    override def apply[A](fa: Op[A]): FromReq[A] = ???
+  }
+
+  def fromReq[A](prg: BuildEndpoint[A]): HtReq => Option[A] = req => {
+    prg
+      .foldMap(fromReqCompiler)
+      .run(req).value
+      .run(req).value
+      ._2
+  }
 }
