@@ -1,14 +1,22 @@
 package com.dimitarg
 
-import cats.implicits._
+import cats.Applicative
+import com.dimitarg.alg.BuildEndpoint
 import dsl._
 
 object App {
+
+  final case class Input(accountId: String, shrubbery: String)
+
   def main(args: Array[String]): Unit = {
 
-    val endpoint = methodGET *>
-      constPath("v1") *> constPath("accounts")  *> pathVar("accountId") *>
-        queryParam("shrubbery")
+    val endpoint: BuildEndpoint[Input] = Applicative[BuildEndpoint].map5(
+      methodGET,
+      constPath("v1"), constPath("accounts"), pathVar("accountId"),
+      queryParam("shrubbery")
+    ) { (_, _, _, accountId, shrubbery) =>
+      Input(accountId, shrubbery)
+    }
 
     val description = interpreter.print(endpoint)
 
