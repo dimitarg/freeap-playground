@@ -2,7 +2,7 @@ package com.dimitarg
 
 import cats.implicits._
 import cats.arrow.FunctionK
-import cats.data.{Const, Kleisli, OptionT, State}
+import cats.data.{Const, Kleisli, StateT}
 import cats.~>
 import com.dimitarg.alg.BuildEndpoint
 import com.dimitarg.infra.HtReq
@@ -10,8 +10,6 @@ import com.dimitarg.infra.HtReq
 package object interpreter {
 
   type Log[A] = Const[List[String], A]
-
-  type FromReq[A] = Kleisli[OptionT[State[HtReq, *], *], HtReq, A]
 
   def printerCompiler: Op ~> Log = new FunctionK[Op, Log] {
     override def apply[A](x: Op[A]): Log[A] = {
@@ -31,12 +29,16 @@ package object interpreter {
 
   def metricName[A](prg: BuildEndpoint[A]): String = prg.foldMap(metricsNameCompiler).getConst.mkString("/")
 
+
+  type FromReq[A] = Kleisli[StateT[Option, List[String], *], HtReq, A]
+
+
   def fromReqCompiler: Op ~> FromReq = new FunctionK[Op, FromReq] {
 
-    def consumeFirstSegment: Kleisli[OptionT[State[HtReq, *], *], HtReq, String] = Kleisli { req =>
-      req.path match {
-        case x::xs => OptionT.liftF(State.set(HtReq(req.methodName, xs, req.query)).map(_ => x))
-        case _ => OptionT.none
+    val consumeFirstSegment: StateT[Option, List[String], String] = StateT { path =>
+      path match {
+        case x::xs => Some((xs, x))
+        case _ => None
       }
     }
 
@@ -44,32 +46,40 @@ package object interpreter {
       x match {
         case m: MethodName =>
           if (req.methodName == m) {
-            OptionT.liftF(State.pure(()))
+            StateT.pure(())
           } else {
-            OptionT.none
+            StateT.liftF(None)
           }
         case PathSegment.StringVar(_) =>
-          consumeFirstSegment.run(req)
+          consumeFirstSegment
         case PathSegment.Const(pathName) =>
-          consumeFirstSegment.run(req).flatMap{segName =>
-            if (segName == pathName) {
-              OptionT.liftF(State.pure(()))
+          consumeFirstSegment.flatMapF { seg =>
+            if (seg == pathName) {
+              Some(())
             } else {
-              OptionT.none
+              None
             }
           }
         case QueryParam(name) =>
-          OptionT.fromOption(req.query.get(name))
+          StateT.liftF(req.query.get(name))
       }
 
     }
   }
 
   def fromReq[A](prg: BuildEndpoint[A]): HtReq => Option[A] = req => {
-    prg
+    val out =
+      prg
       .foldMap(fromReqCompiler)
-      .run(req).value
-      .run(req).value
-      ._2
+      .run(req)
+      .run(req.path)
+
+    out.flatMap { case (remainingPath, result) =>
+      remainingPath match {
+        case List() => Some(result)
+        case _ => None
+      }
+
+    }
   }
 }
